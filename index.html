@@ -66,7 +66,8 @@
             autoPath: '#00FFFF',
             visited: '#666666',
             correct: '#800080',
-            incorrect: '#FFFF00'
+            incorrect: '#FFFF00',
+            frontier: '#FFA500'
         };
         
         // Game state
@@ -76,9 +77,11 @@
         let userPath = [];
         let autoPath = [];
         let visited = new Set();
+        let frontier = new Set();
         let isDrawing = false;
         let message = '';
         let messageColor = COLORS.path;
+        let animationId = null;
         
         // Canvas setup
         const canvas = document.getElementById('mazeCanvas');
@@ -97,6 +100,12 @@
         }
         
         function generateMaze() {
+            // Cancel any ongoing animations
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
             // Initialize grid with walls
             maze = Array(ROWS).fill().map(() => Array(COLS).fill(WALL));
             
@@ -127,6 +136,7 @@
             userPath = [];
             autoPath = [];
             visited = new Set();
+            frontier = new Set();
             isDrawing = false;
             message = '';
         }
@@ -141,6 +151,13 @@
                     ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                 }
             }
+            
+            // Draw frontier cells (currently being considered)
+            frontier.forEach(cell => {
+                const [x, y] = cell.split(',').map(Number);
+                ctx.fillStyle = COLORS.frontier;
+                ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+            });
             
             // Draw visited cells from auto-solve
             visited.forEach(cell => {
@@ -226,7 +243,11 @@
             
             if ((dx === 1 && dy === 0) || (dx === 0 && dy === 1)) {
                 if (maze[y][x] === PATH) {
-                    userPath.push({ x, y });
+                    // Only add if it's a new cell or the previous cell (to allow backtracking)
+                    if (userPath.length < 2 || 
+                        !(userPath[userPath.length - 2].x === x && userPath[userPath.length - 2].y === y)) {
+                        userPath.push({ x, y });
+                    }
                     
                     if (x === end.x && y === end.y) {
                         isDrawing = false;
@@ -259,21 +280,37 @@
         }
         
         function solveMaze() {
+            // Reset previous solve attempts
+            visited = new Set();
+            frontier = new Set();
+            autoPath = [];
+            message = "Solving...";
+            messageColor = COLORS.path;
+            
             // A* pathfinding algorithm
-            const openSet = [{ x: start.x, y: start.y, f: 0 }];
+            const openSet = new PriorityQueue();
+            openSet.enqueue(start, 0);
             const cameFrom = {};
             const gScore = { [`${start.x},${start.y}`]: 0 };
             const fScore = { [`${start.x},${start.y}`]: heuristic(start, end) };
-            visited = new Set();
-            autoPath = [];
             
-            while (openSet.length > 0) {
-                openSet.sort((a, b) => a.f - b.f);
-                const current = openSet.shift();
+            frontier.add(`${start.x},${start.y}`);
+            
+            function step() {
+                if (openSet.isEmpty()) {
+                    message = "No solution found!";
+                    messageColor = COLORS.incorrect;
+                    return;
+                }
+                
+                const current = openSet.dequeue().element;
+                frontier.delete(`${current.x},${current.y}`);
                 visited.add(`${current.x},${current.y}`);
                 
                 if (current.x === end.x && current.y === end.y) {
                     reconstructPath(cameFrom);
+                    message = "Solution found!";
+                    messageColor = COLORS.correct;
                     return;
                 }
                 
@@ -291,26 +328,35 @@
                         continue;
                     }
                     
-                    const tentativeGScore = gScore[`${current.x},${current.y}`] + 1;
                     const neighborKey = `${neighbor.x},${neighbor.y}`;
+                    const tentativeGScore = gScore[`${current.x},${current.y}`] + 1;
                     
                     if (tentativeGScore < (gScore[neighborKey] || Infinity)) {
                         cameFrom[neighborKey] = current;
                         gScore[neighborKey] = tentativeGScore;
                         fScore[neighborKey] = tentativeGScore + heuristic(neighbor, end);
                         
-                        if (!openSet.some(n => n.x === neighbor.x && n.y === neighbor.y)) {
-                            openSet.push({ ...neighbor, f: fScore[neighborKey] });
+                        if (!openSet.contains(neighbor, (a, b) => a.x === b.x && a.y === b.y)) {
+                            openSet.enqueue(neighbor, fScore[neighborKey]);
+                            frontier.add(neighborKey);
                         }
                     }
                 }
                 
-                // Visual update
                 drawMaze();
+                
+                // Continue animation unless we've found the end
+                if (!(current.x === end.x && current.y === end.y)) {
+                    animationId = requestAnimationFrame(step);
+                }
             }
+            
+            // Start the animation
+            step();
         }
         
         function heuristic(a, b) {
+            // Manhattan distance
             return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
         }
         
@@ -349,6 +395,30 @@
                     drawMaze();
                 }
             });
+        }
+        
+        // Priority Queue implementation for A*
+        class PriorityQueue {
+            constructor() {
+                this.elements = [];
+            }
+            
+            enqueue(element, priority) {
+                this.elements.push({ element, priority });
+                this.elements.sort((a, b) => a.priority - b.priority);
+            }
+            
+            dequeue() {
+                return this.elements.shift();
+            }
+            
+            isEmpty() {
+                return this.elements.length === 0;
+            }
+            
+            contains(element, compareFn) {
+                return this.elements.some(item => compareFn(item.element, element));
+            }
         }
         
         // Helper function to shuffle array
